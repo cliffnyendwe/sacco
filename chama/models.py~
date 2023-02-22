@@ -1,0 +1,173 @@
+from django.db import models
+from django.utils.translation import ugettext_lazy as _
+from django.utils import timezone
+from core_manager.models import Transaction
+from utils import get_activation_code
+from core_manager.models import User
+from django.db.models import Sum
+
+class ChamaAccount(models.Model):
+    chama_name = models.CharField(max_length=200, unique=False)
+    account_number = models.CharField(max_length=150, unique=True)
+    description = models.TextField(blank=False, null=True)
+    date_created = models.DateTimeField(_('date created'), default=timezone.now)
+    administrator = models.ForeignKey(User)
+    rotating_amount = models.FloatField(blank=True, default=0)
+    #total_contribution = models.FloatField(blank=True, default=0)
+    members = models.ManyToManyField(User, related_name="chama_member", through='ChamaMembership')
+    contributions = models.ForeignKey('ChamaContributions' , null=True)
+    payment_day = models.IntegerField(blank=True, default=0) # payment date every month - restore to 5 after adding to api
+    
+    is_closed = models.IntegerField(blank=True, default=0) # 0 - closed, 1- awaiting close processing - members nitified, 2 - filly closed 
+    
+    class Meta:
+        verbose_name = 'Chama Account'
+        verbose_name_plural = 'Chama Accounts'
+    def __str__(self):             
+        return "%s" %(self.chama_name)
+        
+    @property    
+    def total_contribution(self):
+        total_contribution = ChamaContributions.objects.filter(chama_account__id=self.id).aggregate(total_contribution = Sum('amount_paid'))
+        return total_contribution['total_contribution'] or 0.0
+        
+    @property
+    def chama_members(self):
+        members = []
+        memberships = ChamaMembership.objects.filter(chama_account = self)
+        for membership in memberships:
+            members.append(membership.member)
+        return members
+        
+    @property    
+    def total_members(self):
+        return self.members.count()
+
+    def save(self, * args, ** kwargs):
+        if not self.account_number:
+            self.account_number = get_activation_code(size = 6)        
+        super(ChamaAccount, self).save( * args, ** kwargs)
+
+class ChamaMembership(models.Model):
+    chama_account = models.ForeignKey('ChamaAccount')
+    member = models.ForeignKey(User)
+    date_joined = models.DateTimeField(_('date_joined'), default=timezone.now)
+    current_balance = models.FloatField(default=0, blank=True)
+    approved = models.BooleanField(default=False)
+    last_invoice_date =  models.DateField(blank=True, null=True)
+    
+    class Meta:
+        unique_together = ('chama_account', 'member')
+        verbose_name = 'Chama Membership'
+        verbose_name_plural = 'Chama Memberships'
+    def __str__(self):             
+        return "%s - %s" %(self.chama_account, self.member)
+        
+    @property
+    def is_closed(self):
+        return True if self.chama_account.is_closed else False
+        
+    @property
+    def owed_payment(self):
+        total_payable = 0
+        all_invoices = Invoices.objects.filter(is_paid = False, payer = self.member, chama_account = self.chama_account)
+        for invoice in all_invoices:
+            total_payable +=invoice.amount_required
+        return total_payable
+
+class ChamaContributions(models.Model):
+    chama_account = models.ForeignKey('ChamaAccount')
+    paid_by = models.ForeignKey(User)
+    mobile_number = models.CharField(max_length=150, blank = True, null = True)
+    amount_paid = models.FloatField(default=0, blank=True)
+    transaction_type = models.CharField(_('transaction_type'), max_length=6, blank=True,
+                              choices=(('Debit', 'Debit'), ('Credit', 'Credit')))
+    date_paid = models.DateTimeField(_('date paid'), default=timezone.now)
+
+    class Meta:
+        verbose_name = 'Chama Contribution'
+        verbose_name_plural = 'Chama Contributions'
+    def __str__(self):             
+        return "%s - %s" %(self.chama_account, self.amount_paid)
+
+class ChamaInvitations(models.Model):
+    chama_account = models.ForeignKey('ChamaAccount')
+    member_mobile = models.CharField(max_length=100, unique=False)
+    invited_by = models.ForeignKey(User, related_name="invite_by")
+    invited_member = models.ForeignKey(User, related_name="invite_member", blank=True, null=True) # this will be filled after member registration/acceptance of invite
+    notified = models.BooleanField(default=False)
+    invite_accepted = models.BooleanField(default=False)
+    invite_rejected = models.BooleanField(default=False)
+    class Meta:
+        verbose_name = 'Chama Invitation'
+        verbose_name_plural = 'Chama Invitations'
+        unique_together = (("chama_account", "member_mobile"),)
+
+    def send_invitations(self):
+        for member in self.chama_account.chamamembership_set.all():
+            approval = MemberAppprovals(
+                invited_member = self.invited_member,
+                chama_account = self.chama_account,
+                member_to_approve = member.member,
+            )
+            approval.save()
+        
+    def __init__(self, *args, **kwargs):
+        super(ChamaInvitations, self).__init__(*args, **kwargs)
+        #self.invite_accepted_previous = self.invite_accepted
+    def save(self, * args, ** kwargs):
+        super(ChamaInvitations, self).save( * args, ** kwargs)
+        """if self.invite_accepted:
+            self.send_invitations()"""
+
+
+# member will signup to chama system, get invite after loogin. When invite is accepted, 
+# member approvalsare recorder and sent out to already registered members for that chama
+class MemberAppprovals(models.Model):
+    invited_member = models.ForeignKey(User, related_name="invited_member")
+    chama_account = models.ForeignKey('ChamaAccount')
+    member_to_approve = models.ForeignKey(User, related_name="member_to_approve")
+    approved = models.BooleanField(default=False)
+    
+    class Meta:
+        verbose_name = 'Chama Member Approval'
+        verbose_name_plural = 'Chama Member Approvals'
+        unique_together = (("invited_member", "chama_account", "member_to_approve"),)
+        
+
+class Invoices(models.Model):
+    payer = models.ForeignKey(User)
+    chama_account = models.ForeignKey('ChamaAccount')
+    amount_required = models.FloatField(default=0, blank=True)
+    is_paid = models.BooleanField(default=False)
+    due_date = models.DateField()
+    last_notification_date =  models.DateField(blank=True, null=True)
+
+    class Meta:
+        verbose_name = 'Invoice'
+        verbose_name_plural = 'Invoices'
+    def __str__(self):             
+        return "%s - %s" %(self.payer, self.chama_account)
+        
+        
+class ChamaNotifications(models.Model):
+    chama_account = models.ForeignKey('ChamaAccount', blank=True, null=True)
+    recipient = models.ForeignKey(User, related_name="recipient", blank=True, null=True)
+    sent_by = models.ForeignKey(User, related_name="sent_by", blank=True, null=True)
+    title = models.CharField(max_length=255,blank=False)
+    message = models.TextField(blank=False)
+    sent = models.BooleanField(default=False)
+    date_created = models.DateTimeField(_('date created'), default=timezone.now)
+    total_recipients = models.IntegerField(blank=True, default=0)
+    class Meta:
+        verbose_name = 'Chama Notifications'
+        verbose_name_plural = 'Chama Notifications'  
+        
+class NotificationLog(models.Model):
+    sent_to = models.ForeignKey(User, related_name="sent_to", blank=True, null=True)
+    message = models.TextField()
+    date_sent = models.DateTimeField(_('date sent'), default=timezone.now)
+    
+    class Meta:
+        verbose_name = 'Notification Log'
+        verbose_name_plural = 'Notification Log'  

@@ -1,0 +1,38 @@
+{% if survey_list %}
+<div class="results">
+    <table class="table table-striped table-bordered table-hover table-condensed" id="result_list">
+    <thead>
+        <tr>               
+            <th>#</th>
+            <th>Circle Member</th>
+            <th>Phone Number</th>
+            <th>Unpaid Invoices</th>
+            <th>Completed</th>
+        </tr>
+    </thead>
+        <tbody>
+            {% for sv_id, survey in survey_list.items %}
+                <tr class="{% cycle 'row1' 'row2'%}">
+                    <td>{{ forloop.counter }}</td>   
+                    <td>{{ survey.member_names }}</td>
+                    <td>{{ survey.mobile_number }}</td>
+                    <td>{{ survey.unpaid_invoices }}</td>
+                    <td>
+                        {% if survey.completed %}
+                            <img alt="True" src="/static/admin/img/icon-yes.gif">
+                        {% else %}
+                            <a href="{% url 'admin:index' %}chama/surveylist/{{ sv_id }}/{{ survey.unpaid_invoices }}/complete_survey" tabindex="-1">Complete survey &raquo; </a> 
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+    <div class="alert alert-block alert-info">
+      <h4>Nothing found!</h4>
+      <br>
+      <a href="#">Select options above to continue</a>
+    </div>
+{% endif %}

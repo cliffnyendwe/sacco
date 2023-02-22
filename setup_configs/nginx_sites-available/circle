@@ -1,0 +1,22 @@
+server {
+    
+    listen 80;
+
+
+    server_name circle.imaginarium.co.ke;
+    #server_name 146.185.169.101;
+
+    access_log /var/log/nginx/circle/access.log;
+    error_log /var/log/nginx/circle/error.log;
+
+    location = /favicon.ico { access_log off; log_not_found off; }
+    location /static/ {
+        root /home/apps/circle;
+    }
+
+    location / {
+        include proxy_params;
+        proxy_pass http://unix:/home/apps/circle/circle.sock;
+    }
+}
+
